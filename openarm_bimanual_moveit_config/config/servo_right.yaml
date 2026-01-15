@@ -1,0 +1,82 @@
+# right_servo_node:
+#   ros__parameters:
+#     move_group_name: right_arm
+#     planning_frame: world
+#     ee_frame: openarm_right_hand
+
+#     # 右臂专用输入话题，避免双臂互抢
+#     twist_command_in_topic: /right_servo_node/delta_twist_cmds
+#     joint_command_in_topic: /right_servo_node/delta_joint_cmds
+#     command_in_type: speed_units
+#     scale:
+#       linear: 1.0
+#       rotational: 1.0
+#     low_latency_mode: false
+
+#     command_out_topic: /right_joint_trajectory_controller/joint_trajectory
+#     command_out_type: trajectory_msgs/JointTrajectory
+#     publish_period: 0.01
+#     joint_topic: /joint_states
+
+#     check_collisions: true
+#     collision_check_rate: 50.0
+#     self_collision_proximity_threshold: 0.02
+#     scene_collision_proximity_threshold: 0.02
+#     singularity_threshold: 0.1
+
+#     incoming_command_timeout: 0.1
+#     num_outgoing_halt_msgs_to_publish: 4
+#     halt_all_joints_in_joint_mode: true
+#     halt_all_joints_in_cartesian_mode: true
+#     override_velocity_limits: false
+#     use_stopped_velocity_threshold: true
+#     stopped_velocity_threshold: 1e-3
+
+#     status_topic: status
+
+moveit_servo:
+  ros__parameters:
+    ## 基本
+    move_group_name: right_arm
+    # TF 根为 world，使用 world 作为规划参考帧
+    planning_frame: world
+    ee_frame_name: openarm_right_hand
+    robot_link_command_frame: openarm_right_hand
+    use_gazebo: false
+    publish_period: 0.01          # 100 Hz
+    low_latency_mode: true
+
+    ## 输入方式与缩放
+    command_in_type: speed_units   # speed_units / unitless
+    scale:
+      linear: 0.5
+      rotational: 0.5
+      joint: 0.5
+
+    ## 输入输出 Topic（~ 会自动带上 namespace）
+    cartesian_command_in_topic: ~/delta_twist_cmds
+    joint_command_in_topic: ~/delta_joint_cmds
+    command_out_type: trajectory_msgs/JointTrajectory
+    command_out_topic: /right_joint_trajectory_controller/joint_trajectory
+    status_topic: ~/status
+    joint_topic: /joint_states
+
+    ## 安全
+    incoming_command_timeout: 0.1
+    num_outgoing_halt_msgs_to_publish: 4
+
+    ## 速度限制
+    linear_velocity_limit: 0.5      # m/s
+    angular_velocity_limit: 1.0     # rad/s
+    joint_velocity_limit: 2.0       # rad/s
+
+    ## 奇异性
+    singularity_threshold: 10.0
+    hard_stop_singularity_threshold: 20.0
+    leaving_singularity_threshold_multiplier: 2.0
+
+    ## 碰撞检测
+    check_collisions: true
+    collision_check_rate: 10.0
+    self_collision_proximity_threshold: 0.01
+    scene_collision_proximity_threshold: 0.02

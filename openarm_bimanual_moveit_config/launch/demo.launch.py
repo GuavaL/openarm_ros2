@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import yaml
 import xacro
 from ament_index_python.packages import (
     get_package_share_directory,
@@ -32,6 +33,14 @@ from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
+def load_yaml(package_name: str, relative_path: str):
+    """Load a YAML file from a package share directory."""
+    pkg_path = get_package_share_directory(package_name)
+    yaml_path = os.path.join(pkg_path, relative_path)
+    with open(yaml_path, "r") as f:
+        return yaml.safe_load(f)
+
+
 def generate_robot_description(
     context: LaunchContext,
     description_package,
@@ -41,6 +50,9 @@ def generate_robot_description(
     right_can_interface,
     left_can_interface,
     arm_prefix,
+    hardware_type,
+    websocket_port_right,
+    websocket_port_left,
 ):
     """Render Xacro and return XML string."""
     description_package_str = context.perform_substitution(description_package)
@@ -50,6 +62,15 @@ def generate_robot_description(
     right_can_interface_str = context.perform_substitution(right_can_interface)
     left_can_interface_str = context.perform_substitution(left_can_interface)
     arm_prefix_str = context.perform_substitution(arm_prefix)
+    hardware_type_str = context.perform_substitution(hardware_type)
+    websocket_port_right_str = context.perform_substitution(websocket_port_right)
+    websocket_port_left_str = context.perform_substitution(websocket_port_left)
+
+    # 兼容旧参数：hardware_type=mock 时强制假硬件；sim 时强制真（MuJoCo 插件）
+    if hardware_type_str == "mock":
+        use_fake_hardware_str = "true"
+    elif hardware_type_str == "sim":
+        use_fake_hardware_str = "false"
 
     xacro_path = os.path.join(
         get_package_share_directory(description_package_str),
@@ -67,6 +88,9 @@ def generate_robot_description(
             "ros2_control": "true",
             "left_can_interface": left_can_interface_str,
             "right_can_interface": right_can_interface_str,
+            "hardware_type": hardware_type_str,
+            "websocket_port_right": websocket_port_right_str,
+            "websocket_port_left": websocket_port_left_str,
             # arm_prefix unused inside xacro but kept for completeness
         },
     ).toprettyxml(indent="  ")
@@ -84,6 +108,9 @@ def robot_nodes_spawner(
     right_can_interface,
     left_can_interface,
     arm_prefix,
+    hardware_type,
+    websocket_port_right,
+    websocket_port_left,
 ):
     robot_description = generate_robot_description(
         context,
@@ -94,6 +121,9 @@ def robot_nodes_spawner(
         right_can_interface,
         left_can_interface,
         arm_prefix,
+        hardware_type,
+        websocket_port_right,
+        websocket_port_left,
     )
 
     controllers_file_str = context.perform_substitution(controllers_file)
@@ -126,6 +156,9 @@ def controller_spawner(context: LaunchContext, robot_controller):
     elif robot_controller_str == "joint_trajectory_controller":
         left = "left_joint_trajectory_controller"
         right = "right_joint_trajectory_controller"
+    elif robot_controller_str == "forward_effort_controller":
+        left = "left_forward_effort_controller"
+        right = "right_forward_effort_controller"
     else:
         raise ValueError(f"Unknown robot_controller: {robot_controller_str}")
 
@@ -151,10 +184,16 @@ def generate_launch_description():
         DeclareLaunchArgument("arm_type", default_value="v10"),
         DeclareLaunchArgument("use_fake_hardware", default_value="false"),
         DeclareLaunchArgument(
+            "hardware_type",
+            default_value="real",
+            choices=["real", "mock", "sim"],
+        ),
+        DeclareLaunchArgument(
             "robot_controller",
             default_value="joint_trajectory_controller",
             choices=["forward_position_controller",
-                     "joint_trajectory_controller"],
+                     "joint_trajectory_controller",
+                     "forward_effort_controller"],
         ),
         DeclareLaunchArgument(
             "runtime_config_package", default_value="openarm_bringup"
@@ -162,6 +201,8 @@ def generate_launch_description():
         DeclareLaunchArgument("arm_prefix", default_value=""),
         DeclareLaunchArgument("right_can_interface", default_value="can0"),
         DeclareLaunchArgument("left_can_interface", default_value="can1"),
+        DeclareLaunchArgument("websocket_port_right", default_value="1337"),
+        DeclareLaunchArgument("websocket_port_left", default_value="1338"),
         DeclareLaunchArgument(
             "controllers_file",
             default_value="openarm_v10_bimanual_controllers.yaml",
@@ -178,6 +219,9 @@ def generate_launch_description():
     right_can_interface = LaunchConfiguration("right_can_interface")
     left_can_interface = LaunchConfiguration("left_can_interface")
     arm_prefix = LaunchConfiguration("arm_prefix")
+    hardware_type = LaunchConfiguration("hardware_type")
+    websocket_port_right = LaunchConfiguration("websocket_port_right")
+    websocket_port_left = LaunchConfiguration("websocket_port_left")
 
     controllers_file = PathJoinSubstitution(
         [FindPackageShare(runtime_config_package), "config",
@@ -195,6 +239,9 @@ def generate_launch_description():
             right_can_interface,
             left_can_interface,
             arm_prefix,
+            hardware_type,
+            websocket_port_right,
+            websocket_port_left,
         ],
     )
 
@@ -223,14 +270,21 @@ def generate_launch_description():
     moveit_config = MoveItConfigsBuilder(
         "openarm", package_name="openarm_bimanual_moveit_config"
     ).to_moveit_configs()
-
+    # 显式设置运动学，避免 to_dict 时丢失
+    kinematics_yaml = load_yaml(
+        "openarm_bimanual_moveit_config", "config/kinematics.yaml"
+    )
+    moveit_config.robot_description_kinematics = kinematics_yaml
     moveit_params = moveit_config.to_dict()
 
     run_move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
         output="screen",
-        parameters=[moveit_params],
+        parameters=[
+            moveit_params,
+            {"robot_description_kinematics": kinematics_yaml},
+        ],
     )
 
     rviz_cfg = os.path.join(
@@ -244,7 +298,10 @@ def generate_launch_description():
         name="rviz2",
         output="log",
         arguments=["-d", rviz_cfg],
-        parameters=[moveit_params],
+        parameters=[
+            moveit_params,
+            {"robot_description_kinematics": kinematics_yaml},
+        ],
     )
 
     return LaunchDescription(
